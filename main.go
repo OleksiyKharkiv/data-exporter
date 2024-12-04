@@ -20,50 +20,55 @@ func ExecuteCommand(command string) (string, error) {
 	return out.String(), err
 }
 
-func ConnectSSHWithPassphrase(remoteServer, privateKeyPath, user string) (*exec.Cmd, error) {
+// ConnectSSHWithPassphrase establishes an SSH connection using a private key.
+func ConnectSSHWithPassphrase(remoteServer, privateKeyPath, user string) error {
 	log.Println("Starting SSH connection...")
 
-	// Проверяем существование файла .pem
+	// Step 1: Check if the private key file exists
+	log.Printf("Checking if private key file exists at path: %s", privateKeyPath)
 	if _, err := os.Stat(privateKeyPath); os.IsNotExist(err) {
-		return nil, fmt.Errorf("private key file not found: %s", privateKeyPath)
+		return fmt.Errorf("private key file not found: %s", privateKeyPath)
 	}
 
-	// Формируем SSH-команду с флагом -tt
-	command := fmt.Sprintf(`ssh -tt -i "%s" %s@%s`, privateKeyPath, user, remoteServer)
+	// Step 2: Read the private key file to ensure it is accessible
+	log.Println("Reading private key file...")
+	keyContent, err := os.ReadFile(privateKeyPath)
+	if err != nil {
+		return fmt.Errorf("failed to read private key file: %w", err)
+	}
+	log.Printf("Private key file content read successfully. Size: %d bytes", len(keyContent))
 
-	// Создаём команду для выполнения
-	cmd := exec.Command("bash", "-c", command)
+	// Step 3: Format the SSH command for PowerShell
+	command := fmt.Sprintf(`ssh -i "%s" %s@%s`, privateKeyPath, user, remoteServer)
+	log.Printf("Formatted SSH command: %s", command)
 
-	// Перенаправляем ввод-вывод
+	// Step 4: Execute the SSH command using PowerShell
+	log.Println("Executing SSH command using PowerShell...")
+	cmd := exec.Command("powershell", "-Command", command)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
 
-	// Логируем команду перед запуском
-	log.Printf("Running SSH command: %s", command)
-
-	// Запускаем и ожидаем завершения
-	err := cmd.Run()
-	if err != nil {
-		log.Printf("Error starting SSH command: %v", err)
-		return nil, fmt.Errorf("failed to start SSH connection: %v", err)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to start SSH connection: %w", err)
 	}
 
-	log.Println("SSH connection established.")
-	return cmd, nil
+	log.Println("SSH connection established successfully.")
+	return nil
 }
 
-// GetLatestDumpFolder retrieves the most recent "dump_" folder in the /data directory
-func GetLatestDumpFolder(remoteServer, user, password string) (string, error) {
+// GetLatestDumpFolder retrieves the most recent "dump_" folder from remote server2
+func GetLatestDumpFolder(remoteServer2, user2, password2 string) (string, error) {
 	log.Println("Getting the latest dump folder...")
 
-	// Используем sshpass для подключения через SSH и получения списка папок
-	command := fmt.Sprintf(`sshpass -p '%s' ssh -o StrictHostKeyChecking=no %s@%s "ls /data"`, password, user, remoteServer)
+	// Use sshpass to connect via SSH and list directories
+	command := fmt.Sprintf(`sshpass -p '%s' ssh -o StrictHostKeyChecking=no %s@%s "ls /data"`, password2, user2, remoteServer2)
 	output, err := ExecuteCommand(command)
 	if err != nil {
-		return "", fmt.Errorf("failed to list dump folders: %v", err)
+		return "", fmt.Errorf("failed to list dump folders: %w", err)
 	}
 
+	// Parse and filter the directory list
 	lines := strings.Split(output, "\n")
 	var dumpFolders []string
 	for _, line := range lines {
@@ -76,7 +81,7 @@ func GetLatestDumpFolder(remoteServer, user, password string) (string, error) {
 		return "", fmt.Errorf("no dump folders found")
 	}
 
-	// Сортируем папки по имени и выбираем самую последнюю
+	// Sort folders to find the latest one
 	sort.Strings(dumpFolders)
 	latestDumpFolder := dumpFolders[len(dumpFolders)-1]
 	log.Printf("Found latest dump folder: %s", latestDumpFolder)
@@ -84,17 +89,17 @@ func GetLatestDumpFolder(remoteServer, user, password string) (string, error) {
 }
 
 // FetchDumpSubfolders downloads specific subfolders from the latest dump folder
-func FetchDumpSubfolders(remoteServer, latestDumpFolder, localPath, user, password string) ([]string, error) {
+func FetchDumpSubfolders(remoteServer2, latestDumpFolder, localPath, user2, password2 string) ([]string, error) {
 	log.Println("Fetching subfolders from the latest dump folder...")
 	targetFolders := []string{"mats-user", "mats-payment", "mats-diagnostic", "mats-training-plan"}
-	var successfulFolders []string
+	var successfulFolders []string //nolint:prealloc
 
 	for _, folder := range targetFolders {
 		remotePath := fmt.Sprintf("%s/%s", latestDumpFolder, folder)
-		command := fmt.Sprintf(`sshpass -p '%s' sftp -r -P 30222 %s@%s:%s %s`, password, user, remoteServer, remotePath, localPath)
-		_, err := ExecuteCommand(command)
+		command := fmt.Sprintf(`sshpass -p '%s' sftp -r -P 30222 %s@%s:%s %s`, password2, user2, remoteServer2, remotePath, localPath)
+		output, err := ExecuteCommand(command)
 		if err != nil {
-			log.Printf("Failed to fetch folder %s: %v\n", folder, err)
+			log.Printf("Failed to fetch folder %s: %v\nOutput: %s", folder, err, output)
 			continue
 		}
 		successfulFolders = append(successfulFolders, folder)
@@ -104,36 +109,76 @@ func FetchDumpSubfolders(remoteServer, latestDumpFolder, localPath, user, passwo
 	return successfulFolders, nil
 }
 
+// CleanOldDumps removes old dumps on remoteServer1
+func CleanOldDumps(remoteServer1, user1 string) error {
+	log.Println("Cleaning old dumps on remote server...")
+	command := fmt.Sprintf(`ssh -tt %s@%s "sudo rm -r /var/lib/mongodb/download/dump/*"`, user1, remoteServer1)
+	output, err := ExecuteCommand(command)
+	if err != nil {
+		log.Printf("Error cleaning old dumps: %v\nOutput: %s", err, output)
+		return fmt.Errorf("failed to clean old dumps: %w", err)
+	}
+	log.Println("Old dumps successfully cleaned.")
+	return nil
+}
+
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile) // Enable timestamps and file/line number logging
 	log.Println("Starting data export...")
 
-	remoteServer := "116.202.11.250"
-	user := "jens"
-	password := "J7Beuv0YI9qQCMY"
+	remoteServer1 := "172.201.121.48"
+	user1 := "MATS-VM-01_admin"
 	privateKeyPath := "C:/MATS/Olex/Olex.pem"
+	remoteServer2 := "116.202.11.250"
+	user2 := "jens"
+	password2 := "J7Beuv0YI9qQCMY" //nolint:gosec
 
-	log.Println("Step 1: Connecting to the remote server via SSH...")
-	_, err := ConnectSSHWithPassphrase(remoteServer, privateKeyPath, user)
+	// Step 1: Connect to remote server1
+	log.Println("Step 1: Connecting to remote server 1 via SSH...")
+	err := ConnectSSHWithPassphrase(remoteServer1, privateKeyPath, user1)
 	if err != nil {
-		log.Printf("Error connecting to remote server: %v\n", err)
-		return
+		log.Fatalf("Error connecting to remote server 1: %v", err)
 	}
 
-	log.Println("Step 2: Fetching the latest dump folder...")
-	latestDumpFolder, fetchDumpErr := GetLatestDumpFolder(remoteServer, user, password)
+	// Step 2: Clean old dumps on remote server 1
+	log.Println("Step 2: Cleaning old dumps on remote server 1...")
+	err = CleanOldDumps(remoteServer1, user1)
+	if err != nil {
+		log.Fatalf("Error cleaning old dumps: %v", err)
+	}
+
+	// Step 3: Get the latest dump folder from remote server 2
+	log.Println("Step 3: Fetching the latest dump folder from remote server 2...")
+	latestDumpFolder, fetchDumpErr := GetLatestDumpFolder(remoteServer2, user2, password2)
 	if fetchDumpErr != nil {
-		log.Fatalf("Error finding latest dump folder: %v", fetchDumpErr) // Завершаем выполнение с логированием
+		log.Printf("Critical error: Unable to find the latest dump folder on remote server 2: %v", fetchDumpErr)
+		log.Println("Terminating the program. Ensure the remote server is reachable and the credentials are correct.")
+		os.Exit(1) // Завершаем выполнение программы с кодом ошибки
 	}
-	log.Printf("Latest dump folder: %s", latestDumpFolder)
 
-	log.Println("Step 3: Fetching subfolders from the latest dump folder...")
-	successfulFolders, fetchSubfoldersErr := FetchDumpSubfolders(remoteServer, latestDumpFolder, ".", user, password)
+	log.Printf("Successfully identified the latest dump folder: %s", latestDumpFolder)
+
+	// Step 4: Fetch specific subfolders from the latest dump folder
+	log.Println("Step 4: Fetching subfolders from the latest dump folder...")
+	successfulFolders, fetchSubfoldersErr := FetchDumpSubfolders(remoteServer2, latestDumpFolder, ".", user2, password2)
 	if fetchSubfoldersErr != nil {
-		log.Fatalf("Error fetching subfolders: %v", fetchSubfoldersErr) // Завершаем выполнение с логированием
+		log.Printf("Error fetching subfolders from the latest dump folder: %v", fetchSubfoldersErr)
+		log.Println("Attempting to proceed with any subfolders that were successfully fetched.")
 	}
 
+	if len(successfulFolders) == 0 {
+		log.Println("No subfolders were successfully fetched. This is a critical error.")
+		log.Println("Terminating program as no data could be transferred.")
+		os.Exit(1) // Завершаем выполнение программы с кодом ошибки
+	}
+
+	// Logging successful subfolders
 	log.Println("Successfully fetched the following folders:")
+	for _, folder := range successfulFolders {
+		log.Println("- " + folder)
+	}
+
+	// Step 5: Final log of successful subfollowing folders:")
 	for _, folder := range successfulFolders {
 		log.Println("- " + folder)
 	}
