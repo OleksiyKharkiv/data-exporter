@@ -109,57 +109,56 @@ func FetchDumpSubfolders(remoteServer2, latestDumpFolder, localPath, user2, pass
 	return successfulFolders, nil
 }
 
-// CleanOldDumps removes old dumps on remoteServer1
-func CleanOldDumps(remoteServer1, user1 string) error {
-	log.Println("Cleaning old dumps on remote server...")
-	command := fmt.Sprintf(`ssh -tt %s@%s "sudo rm -r /var/lib/mongodb/download/dump/*"`, user1, remoteServer1)
-	output, err := ExecuteCommand(command)
+func CleanOldDumps(remoteServer, user, privateKeyPath, remotePath string) error {
+	// PowerShell command to connect and remove all folders using sudo
+	psCommand := fmt.Sprintf(
+		`ssh -i "%s" %s@%s "sudo find %s -mindepth 1 -maxdepth 1 -exec rm -r {} \;"`,
+		privateKeyPath, user, remoteServer, remotePath,
+	)
+
+	// Run PowerShell command
+	cmd := exec.Command("powershell", "-Command", psCommand)
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		log.Printf("Error cleaning old dumps: %v\nOutput: %s", err, output)
-		return fmt.Errorf("failed to clean old dumps: %w", err)
+		return fmt.Errorf("failed to clean old dumps: %v\nOutput: %s", err, string(output))
 	}
-	log.Println("Old dumps successfully cleaned.")
+
+	log.Printf("Old dumps cleaned successfully. Output: %s", string(output))
 	return nil
 }
 
 func main() {
-	log.SetFlags(log.LstdFlags | log.Lshortfile) // Enable timestamps and file/line number logging
+	log.SetFlags(log.LstdFlags | log.Lshortfile) // Logging with date and file
 	log.Println("Starting data export...")
 
 	remoteServer1 := "172.201.121.48"
 	user1 := "MATS-VM-01_admin"
 	privateKeyPath := "C:/MATS/Olex/Olex.pem"
+	remotePath := "/var/lib/mongodb/download/dump/"
 	remoteServer2 := "116.202.11.250"
 	user2 := "jens"
 	password2 := "J7Beuv0YI9qQCMY" //nolint:gosec
 
-	// Step 1: Connect to remote server1
-	log.Println("Step 1: Connecting to remote server 1 via SSH...")
-	err := ConnectSSHWithPassphrase(remoteServer1, privateKeyPath, user1)
-	if err != nil {
-		log.Fatalf("Error connecting to remote server 1: %v", err)
-	}
-
-	// Step 2: Clean old dumps on remote server 1
-	log.Println("Step 2: Cleaning old dumps on remote server 1...")
-	err = CleanOldDumps(remoteServer1, user1)
+	// Step 1: Clean old dumps on remote server 1
+	log.Println("Step 1: Cleaning old dumps on remote server 1...")
+	err := CleanOldDumps(remoteServer1, user1, privateKeyPath, remotePath)
 	if err != nil {
 		log.Fatalf("Error cleaning old dumps: %v", err)
 	}
 
-	// Step 3: Get the latest dump folder from remote server 2
-	log.Println("Step 3: Fetching the latest dump folder from remote server 2...")
+	// Step 2: Get the latest dump folder from remote server 2
+	log.Println("Step 2: Fetching the latest dump folder from remote server 2...")
 	latestDumpFolder, fetchDumpErr := GetLatestDumpFolder(remoteServer2, user2, password2)
 	if fetchDumpErr != nil {
 		log.Printf("Critical error: Unable to find the latest dump folder on remote server 2: %v", fetchDumpErr)
 		log.Println("Terminating the program. Ensure the remote server is reachable and the credentials are correct.")
-		os.Exit(1) // Завершаем выполнение программы с кодом ошибки
+		os.Exit(1)
 	}
 
 	log.Printf("Successfully identified the latest dump folder: %s", latestDumpFolder)
 
-	// Step 4: Fetch specific subfolders from the latest dump folder
-	log.Println("Step 4: Fetching subfolders from the latest dump folder...")
+	// Step 3: Fetch specific subfolders from the latest dump folder
+	log.Println("Step 3: Fetching subfolders from the latest dump folder...")
 	successfulFolders, fetchSubfoldersErr := FetchDumpSubfolders(remoteServer2, latestDumpFolder, ".", user2, password2)
 	if fetchSubfoldersErr != nil {
 		log.Printf("Error fetching subfolders from the latest dump folder: %v", fetchSubfoldersErr)
@@ -169,16 +168,11 @@ func main() {
 	if len(successfulFolders) == 0 {
 		log.Println("No subfolders were successfully fetched. This is a critical error.")
 		log.Println("Terminating program as no data could be transferred.")
-		os.Exit(1) // Завершаем выполнение программы с кодом ошибки
+		os.Exit(1)
 	}
 
 	// Logging successful subfolders
 	log.Println("Successfully fetched the following folders:")
-	for _, folder := range successfulFolders {
-		log.Println("- " + folder)
-	}
-
-	// Step 5: Final log of successful subfollowing folders:")
 	for _, folder := range successfulFolders {
 		log.Println("- " + folder)
 	}
