@@ -26,4 +26,16 @@ if ! sudo bash ${FETCH_SCRIPT_PATH}; then
   exit 1
 fi
 echo "Successfully fetched the latest dumps."
+
+# Drop specified databases
+echo "Dropping old databases..."
+mongo --eval 'db.getSiblingDB("mats-diagnostic").dropDatabase()'
+mongo --eval 'db.getSiblingDB("mats-payment").dropDatabase()'
+mongo --eval 'db.getSiblingDB("mats-training-plan").dropDatabase()'
+mongo --eval 'db.getSiblingDB("mats-user").dropDatabase()'
+
+# Restore latest dump
+echo "Restoring the latest dump..."
+mongorestore --gzip /var/lib/mongodb/download/dump
+
 EOF
