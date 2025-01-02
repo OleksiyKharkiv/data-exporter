@@ -88,7 +88,7 @@ if (documents.length > 0) {
     destDB.tempConsumableProduct.insertMany(documents);
 }
 '
-echo "Script executed successfully."
+echo "Copying executed successfully."
 
 EOF
 
