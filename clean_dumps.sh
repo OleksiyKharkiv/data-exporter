@@ -42,14 +42,18 @@ timeout 10m mongorestore --gzip /var/lib/mongodb/download/dump
 echo "Running MongoDB processing scripts..."
 
 # Script 1: Copy data between mats-training-plan and mats-payment
-timeout 10m mongosh --eval '
+timeout 20m mongosh --eval '
 const srcDB = db.getSiblingDB("mats-training-plan");
 const destDB = db.getSiblingDB("mats-payment");
 
-// Assuming you want to copy specific collections, for example, "trainingPlans"
-const documents = srcDB.trainingPlan.find().toArray();
-if (documents.length > 0) {
-    destDB.tempTrainingPlan.insertMany(documents);
+// Assuming you want to copy specific collections, for example, "userTrainingPlan"
+const cursor = srcDB.userTrainingPlan.find();
+while (cursor.hasNext()) {
+    const batch = [];
+    for (let i = 0; i < 1000 && cursor.hasNext(); i++) {
+        batch.push(cursor.next());
+    }
+    destDB.tempUserTrainingPlan.insertMany(batch);
 }
 '
 
